@@ -22,7 +22,15 @@ from typing import Optional
 import transformers
 from seq2seq_trainer import Seq2SeqTrainer
 from seq2seq_training_args import Seq2SeqTrainingArguments
-from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer, HfArgumentParser, MBartTokenizer, set_seed
+from transformers import (
+    AutoConfig,
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    HfArgumentParser,
+    MBartTokenizer,
+    MBartTokenizerFast,
+    set_seed,
+)
 from transformers.trainer_utils import EvaluationStrategy, is_main_process
 from transformers.training_args import ParallelMode
 from utils import (
@@ -97,8 +105,9 @@ class DataTrainingArguments:
         default=142,
         metadata={
             "help": "The maximum total sequence length for validation target text after tokenization. Sequences longer "
-            "than this will be truncated, sequences shorter will be padded."
-            " This argument is also used to override the ``max_length`` param of ``model.generate``, which is used during ``evaluate`` and ``predict``"
+            "than this will be truncated, sequences shorter will be padded. "
+            "This argument is also used to override the ``max_length`` param of ``model.generate``, which is used "
+            "during ``evaluate`` and ``predict``."
         },
     )
     test_max_target_length: Optional[int] = field(
@@ -166,11 +175,11 @@ def main():
         bool(training_args.parallel_mode == ParallelMode.DISTRIBUTED),
         training_args.fp16,
     )
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
     # Set the verbosity to info of the Transformers logger (on main process only):
     if is_main_process(training_args.local_rank):
         transformers.utils.logging.set_verbosity_info()
-        transformers.utils.logging.enable_default_handler()
-        transformers.utils.logging.enable_explicit_format()
     logger.info("Training/evaluation parameters %s", training_args)
 
     # Set seed
@@ -212,11 +221,14 @@ def main():
         data_args.eval_beams = model.config.num_beams
 
     # set decoder_start_token_id for MBart
-    if model.config.decoder_start_token_id is None and isinstance(tokenizer, MBartTokenizer):
+    if model.config.decoder_start_token_id is None and isinstance(tokenizer, (MBartTokenizer, MBartTokenizerFast)):
         assert (
             data_args.tgt_lang is not None and data_args.src_lang is not None
         ), "mBart requires --tgt_lang and --src_lang"
-        model.config.decoder_start_token_id = tokenizer.lang_code_to_id[data_args.tgt_lang]
+        if isinstance(tokenizer, MBartTokenizer):
+            model.config.decoder_start_token_id = tokenizer.lang_code_to_id[data_args.tgt_lang]
+        else:
+            model.config.decoder_start_token_id = tokenizer.convert_tokens_to_ids(data_args.tgt_lang)
 
     if model_args.freeze_embeds:
         freeze_embeds(model)
@@ -273,13 +285,15 @@ def main():
     )
     trainer = Seq2SeqTrainer(
         model=model,
-        config=config,
         args=training_args,
+        data_args=data_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=Seq2SeqDataCollator(tokenizer, data_args, training_args.tpu_num_cores),
+        data_collator=Seq2SeqDataCollator(
+            tokenizer, data_args, model.config.decoder_start_token_id, training_args.tpu_num_cores
+        ),
         compute_metrics=compute_metrics_fn,
-        data_args=data_args,
+        tokenizer=tokenizer,
     )
 
     all_metrics = {}
