@@ -51,6 +51,7 @@ from .configuration_convbert import ConvBertConfig
 
 logger = logging.get_logger(__name__)
 
+_CHECKPOINT_FOR_DOC = "YituTech/conv-bert-base"
 _CONFIG_FOR_DOC = "ConvBertConfig"
 _TOKENIZER_FOR_DOC = "ConvBertTokenizer"
 
@@ -62,11 +63,11 @@ TF_CONVBERT_PRETRAINED_MODEL_ARCHIVE_LIST = [
 ]
 
 
-# Copied from transformers.models.albert.modeling_tf_albert.TFAlbertEmbeddings
+# Copied from transformers.models.albert.modeling_tf_albert.TFAlbertEmbeddings with Albert->ConvBert
 class TFConvBertEmbeddings(tf.keras.layers.Layer):
     """Construct the embeddings from word, position and token_type embeddings."""
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config: ConvBertConfig, **kwargs):
         super().__init__(**kwargs)
 
         self.vocab_size = config.vocab_size
@@ -83,21 +84,21 @@ class TFConvBertEmbeddings(tf.keras.layers.Layer):
             self.weight = self.add_weight(
                 name="weight",
                 shape=[self.vocab_size, self.embedding_size],
-                initializer=get_initializer(initializer_range=self.initializer_range),
+                initializer=get_initializer(self.initializer_range),
             )
 
         with tf.name_scope("token_type_embeddings"):
             self.token_type_embeddings = self.add_weight(
                 name="embeddings",
                 shape=[self.type_vocab_size, self.embedding_size],
-                initializer=get_initializer(initializer_range=self.initializer_range),
+                initializer=get_initializer(self.initializer_range),
             )
 
         with tf.name_scope("position_embeddings"):
             self.position_embeddings = self.add_weight(
                 name="embeddings",
                 shape=[self.max_position_embeddings, self.embedding_size],
-                initializer=get_initializer(initializer_range=self.initializer_range),
+                initializer=get_initializer(self.initializer_range),
             )
 
         super().build(input_shape)
@@ -109,6 +110,7 @@ class TFConvBertEmbeddings(tf.keras.layers.Layer):
         position_ids: tf.Tensor = None,
         token_type_ids: tf.Tensor = None,
         inputs_embeds: tf.Tensor = None,
+        past_key_values_length=0,
         training: bool = False,
     ) -> tf.Tensor:
         """
@@ -117,7 +119,8 @@ class TFConvBertEmbeddings(tf.keras.layers.Layer):
         Returns:
             final_embeddings (:obj:`tf.Tensor`): output embedding tensor.
         """
-        assert not (input_ids is None and inputs_embeds is None)
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("Need to provide either `input_ids` or `input_embeds`.")
 
         if input_ids is not None:
             inputs_embeds = tf.gather(params=self.weight, indices=input_ids)
@@ -128,7 +131,9 @@ class TFConvBertEmbeddings(tf.keras.layers.Layer):
             token_type_ids = tf.fill(dims=input_shape, value=0)
 
         if position_ids is None:
-            position_ids = tf.expand_dims(tf.range(start=0, limit=input_shape[-1]), axis=0)
+            position_ids = tf.expand_dims(
+                tf.range(start=past_key_values_length, limit=input_shape[1] + past_key_values_length), axis=0
+            )
 
         position_embeds = tf.gather(params=self.position_embeddings, indices=position_ids)
         position_embeds = tf.tile(input=position_embeds, multiples=(input_shape[0], 1, 1))
@@ -146,8 +151,8 @@ class TFConvBertSelfAttention(tf.keras.layers.Layer):
 
         if config.hidden_size % config.num_attention_heads != 0:
             raise ValueError(
-                "The hidden size (%d) is not a multiple of the number of attention "
-                "heads (%d)" % (config.hidden_size, config.num_attention_heads)
+                f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
+                f"heads ({config.num_attention_heads})"
             )
 
         new_num_attention_heads = int(config.num_attention_heads / config.head_ratio)
@@ -343,7 +348,7 @@ class GroupedLinearLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         self.kernel = self.add_weight(
             "kernel",
-            shape=[self.num_groups, self.group_in_dim, self.group_out_dim],
+            shape=[self.group_out_dim, self.group_in_dim, self.num_groups],
             initializer=self.kernel_initializer,
             trainable=True,
         )
@@ -355,7 +360,7 @@ class GroupedLinearLayer(tf.keras.layers.Layer):
     def call(self, hidden_states):
         batch_size = shape_list(hidden_states)[0]
         x = tf.transpose(tf.reshape(hidden_states, [-1, self.num_groups, self.group_in_dim]), [1, 0, 2])
-        x = tf.matmul(x, self.kernel)
+        x = tf.matmul(x, tf.transpose(self.kernel, [2, 1, 0]))
         x = tf.transpose(x, [1, 0, 2])
         x = tf.reshape(x, [batch_size, -1, self.output_size])
         x = tf.nn.bias_add(value=x, bias=self.bias)
@@ -441,7 +446,7 @@ class TFConvBertEncoder(tf.keras.layers.Layer):
     def __init__(self, config, **kwargs):
         super().__init__(**kwargs)
 
-        self.layer = [TFConvBertLayer(config, name="layer_._{}".format(i)) for i in range(config.num_hidden_layers)]
+        self.layer = [TFConvBertLayer(config, name=f"layer_._{i}") for i in range(config.num_hidden_layers)]
 
     def call(
         self,
@@ -694,7 +699,7 @@ CONVBERT_INPUTS_DOCSTRING = r"""
             Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
 
             - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **maked**.
+            - 0 for tokens that are **masked**.
 
             `What are attention masks? <../glossary.html#attention-mask>`__
         token_type_ids (:obj:`Numpy array` or :obj:`tf.Tensor` of shape :obj:`({0})`, `optional`):
@@ -738,7 +743,7 @@ CONVBERT_INPUTS_DOCSTRING = r"""
 
 
 @add_start_docstrings(
-    "The bare ConvBERT Model transformer outputing raw hidden-states without any specific head on top.",
+    "The bare ConvBERT Model transformer outputting raw hidden-states without any specific head on top.",
     CONVBERT_START_DOCSTRING,
 )
 class TFConvBertModel(TFConvBertPreTrainedModel):
@@ -749,8 +754,8 @@ class TFConvBertModel(TFConvBertPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(CONVBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="YituTech/conv-bert-base",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TFBaseModelOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -881,8 +886,8 @@ class TFConvBertForMaskedLM(TFConvBertPreTrainedModel, TFMaskedLanguageModelingL
 
     @add_start_docstrings_to_model_forward(CONVBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="YituTech/conv-bert-base",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TFMaskedLMOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -969,7 +974,10 @@ class TFConvBertClassificationHead(tf.keras.layers.Layer):
         self.dense = tf.keras.layers.Dense(
             config.hidden_size, kernel_initializer=get_initializer(config.initializer_range), name="dense"
         )
-        self.dropout = tf.keras.layers.Dropout(config.hidden_dropout_prob)
+        classifier_dropout = (
+            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+        )
+        self.dropout = tf.keras.layers.Dropout(classifier_dropout)
         self.out_proj = tf.keras.layers.Dense(
             config.num_labels, kernel_initializer=get_initializer(config.initializer_range), name="out_proj"
         )
@@ -1002,8 +1010,8 @@ class TFConvBertForSequenceClassification(TFConvBertPreTrainedModel, TFSequenceC
 
     @add_start_docstrings_to_model_forward(CONVBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="YituTech/conv-bert-base",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TFSequenceClassifierOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -1111,8 +1119,8 @@ class TFConvBertForMultipleChoice(TFConvBertPreTrainedModel, TFMultipleChoiceLos
         CONVBERT_INPUTS_DOCSTRING.format("batch_size, num_choices, sequence_length")
     )
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="YituTech/conv-bert-base",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TFMultipleChoiceModelOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -1239,15 +1247,18 @@ class TFConvBertForTokenClassification(TFConvBertPreTrainedModel, TFTokenClassif
 
         self.num_labels = config.num_labels
         self.convbert = TFConvBertMainLayer(config, name="convbert")
-        self.dropout = tf.keras.layers.Dropout(config.hidden_dropout_prob)
+        classifier_dropout = (
+            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+        )
+        self.dropout = tf.keras.layers.Dropout(classifier_dropout)
         self.classifier = tf.keras.layers.Dense(
             config.num_labels, kernel_initializer=get_initializer(config.initializer_range), name="classifier"
         )
 
     @add_start_docstrings_to_model_forward(CONVBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="YituTech/conv-bert-base",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TFTokenClassifierOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -1341,8 +1352,8 @@ class TFConvBertForQuestionAnswering(TFConvBertPreTrainedModel, TFQuestionAnswer
 
     @add_start_docstrings_to_model_forward(CONVBERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="YituTech/conv-bert-base",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TFQuestionAnsweringModelOutput,
         config_class=_CONFIG_FOR_DOC,
     )

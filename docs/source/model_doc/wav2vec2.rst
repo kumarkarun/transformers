@@ -34,7 +34,9 @@ Tips:
 
 - Wav2Vec2 is a speech model that accepts a float array corresponding to the raw waveform of the speech signal.
 - Wav2Vec2 model was trained using connectionist temporal classification (CTC) so the model output has to be decoded
-  using :class:`~transformers.Wav2Vec2Tokenizer`.
+  using :class:`~transformers.Wav2Vec2CTCTokenizer`.
+
+This model was contributed by `patrickvonplaten <https://huggingface.co/patrickvonplaten>`__.
 
 
 Wav2Vec2Config
@@ -44,11 +46,41 @@ Wav2Vec2Config
     :members:
 
 
-Wav2Vec2Tokenizer
+Wav2Vec2CTCTokenizer
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: transformers.Wav2Vec2Tokenizer
+.. autoclass:: transformers.Wav2Vec2CTCTokenizer
     :members: __call__, save_vocabulary
+
+
+Wav2Vec2FeatureExtractor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.Wav2Vec2FeatureExtractor
+    :members: __call__
+
+
+Wav2Vec2Processor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.Wav2Vec2Processor
+    :members: __call__, pad, from_pretrained, save_pretrained, batch_decode, decode, as_target_processor
+
+
+Wav2Vec2 specific outputs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.models.wav2vec2.modeling_wav2vec2.Wav2Vec2BaseModelOutput
+    :members: 
+
+.. autoclass:: transformers.models.wav2vec2.modeling_wav2vec2.Wav2Vec2ForPreTrainingOutput
+    :members: 
+
+.. autoclass:: transformers.models.wav2vec2.modeling_flax_wav2vec2.FlaxWav2Vec2BaseModelOutput
+    :members: 
+
+.. autoclass:: transformers.models.wav2vec2.modeling_flax_wav2vec2.FlaxWav2Vec2ForPreTrainingOutput
+    :members: 
 
 
 Wav2Vec2Model
@@ -63,3 +95,51 @@ Wav2Vec2ForCTC
 
 .. autoclass:: transformers.Wav2Vec2ForCTC
     :members: forward
+
+
+Wav2Vec2ForSequenceClassification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.Wav2Vec2ForSequenceClassification
+    :members: forward
+
+
+Wav2Vec2ForPreTraining
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.Wav2Vec2ForPreTraining
+    :members: forward
+
+
+TFWav2Vec2Model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.TFWav2Vec2Model
+    :members: call
+
+
+TFWav2Vec2ForCTC
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.TFWav2Vec2ForCTC
+    :members: call
+
+
+FlaxWav2Vec2Model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.FlaxWav2Vec2Model
+    :members: __call__
+
+
+FlaxWav2Vec2ForCTC
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.FlaxWav2Vec2ForCTC
+    :members: __call__
+
+FlaxWav2Vec2ForPreTraining
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.FlaxWav2Vec2ForPreTraining
+    :members: __call__

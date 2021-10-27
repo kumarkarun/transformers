@@ -20,9 +20,10 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import torch
-import torch.nn as nn
 import torch.utils.checkpoint
-from torch.nn import CrossEntropyLoss, MSELoss
+from packaging import version
+from torch import nn
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from ...activations import ACT2FN, get_activation
 from ...file_utils import (
@@ -54,6 +55,7 @@ from .configuration_electra import ElectraConfig
 
 logger = logging.get_logger(__name__)
 
+_CHECKPOINT_FOR_DOC = "google/electra-small-discriminator"
 _CONFIG_FOR_DOC = "ElectraConfig"
 _TOKENIZER_FOR_DOC = "ElectraTokenizer"
 
@@ -82,13 +84,13 @@ def load_tf_weights_in_electra(model, config, tf_checkpoint_path, discriminator_
         )
         raise
     tf_path = os.path.abspath(tf_checkpoint_path)
-    logger.info("Converting TensorFlow checkpoint from {}".format(tf_path))
+    logger.info(f"Converting TensorFlow checkpoint from {tf_path}")
     # Load weights from TF model
     init_vars = tf.train.list_variables(tf_path)
     names = []
     arrays = []
     for name, shape in init_vars:
-        logger.info("Loading TF weight {} with shape {}".format(name, shape))
+        logger.info(f"Loading TF weight {name} with shape {shape}")
         array = tf.train.load_variable(tf_path, name)
         names.append(name)
         arrays.append(array)
@@ -111,7 +113,7 @@ def load_tf_weights_in_electra(model, config, tf_checkpoint_path, discriminator_
             # adam_v and adam_m are variables used in AdamWeightDecayOptimizer to calculated m and v
             # which are not required for using pretrained model
             if any(n in ["global_step", "temperature"] for n in name):
-                logger.info("Skipping {}".format(original_name))
+                logger.info(f"Skipping {original_name}")
                 continue
             pointer = model
             for m_name in name:
@@ -137,16 +139,15 @@ def load_tf_weights_in_electra(model, config, tf_checkpoint_path, discriminator_
             elif m_name == "kernel":
                 array = np.transpose(array)
             try:
-                assert (
-                    pointer.shape == array.shape
-                ), f"Pointer shape {pointer.shape} and array shape {array.shape} mismatched"
+                if pointer.shape != array.shape:
+                    raise ValueError(f"Pointer shape {pointer.shape} and array shape {array.shape} mismatched")
             except AssertionError as e:
                 e.args += (pointer.shape, array.shape)
                 raise
-            print("Initialize PyTorch weight {}".format(name), original_name)
+            print(f"Initialize PyTorch weight {name}", original_name)
             pointer.data = torch.from_numpy(array)
         except AttributeError as e:
-            print("Skipping {}".format(original_name), name, e)
+            print(f"Skipping {original_name}", name, e)
             continue
     return model
 
@@ -168,6 +169,12 @@ class ElectraEmbeddings(nn.Module):
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
+        if version.parse(torch.__version__) > version.parse("1.6.0"):
+            self.register_buffer(
+                "token_type_ids",
+                torch.zeros(self.position_ids.size(), dtype=torch.long, device=self.position_ids.device),
+                persistent=False,
+            )
 
     # Copied from transformers.models.bert.modeling_bert.BertEmbeddings.forward
     def forward(
@@ -183,8 +190,16 @@ class ElectraEmbeddings(nn.Module):
         if position_ids is None:
             position_ids = self.position_ids[:, past_key_values_length : seq_length + past_key_values_length]
 
+        # Setting the token_type_ids to the registered buffer in constructor where it is all zeros, which usually occurs
+        # when its auto-generated, registered buffer helps users when tracing the model without passing token_type_ids, solves
+        # issue #5664
         if token_type_ids is None:
-            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+            if hasattr(self, "token_type_ids"):
+                buffered_token_type_ids = self.token_type_ids[:, :seq_length]
+                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(input_shape[0], seq_length)
+                token_type_ids = buffered_token_type_ids_expanded
+            else:
+                token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
@@ -205,8 +220,8 @@ class ElectraSelfAttention(nn.Module):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
-                "The hidden size (%d) is not a multiple of the number of attention "
-                "heads (%d)" % (config.hidden_size, config.num_attention_heads)
+                f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
+                f"heads ({config.num_attention_heads})"
             )
 
         self.num_attention_heads = config.num_attention_heads
@@ -431,7 +446,8 @@ class ElectraLayer(nn.Module):
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
         if self.add_cross_attention:
-            assert self.is_decoder, f"{self} should be used as a decoder model if cross attention is added"
+            if not self.is_decoder:
+                raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
             self.crossattention = ElectraAttention(config)
         self.intermediate = ElectraIntermediate(config)
         self.output = ElectraOutput(config)
@@ -466,9 +482,10 @@ class ElectraLayer(nn.Module):
 
         cross_attn_present_key_value = None
         if self.is_decoder and encoder_hidden_states is not None:
-            assert hasattr(
-                self, "crossattention"
-            ), f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention layers by setting `config.add_cross_attention=True`"
+            if not hasattr(self, "crossattention"):
+                raise ValueError(
+                    f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention layers by setting `config.add_cross_attention=True`"
+                )
 
             # cross_attn cached key/values tuple is at positions 3,4 of past_key_value tuple
             cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
@@ -511,6 +528,7 @@ class ElectraEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.layer = nn.ModuleList([ElectraLayer(config) for _ in range(config.num_hidden_layers)])
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -537,12 +555,11 @@ class ElectraEncoder(nn.Module):
             layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
 
-            if getattr(self.config, "gradient_checkpointing", False) and self.training:
+            if self.gradient_checkpointing and self.training:
 
                 if use_cache:
-                    logger.warn(
-                        "`use_cache=True` is incompatible with `config.gradient_checkpointing=True`. Setting "
-                        "`use_cache=False`..."
+                    logger.warning(
+                        "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
                     )
                     use_cache = False
 
@@ -647,21 +664,30 @@ class ElectraPreTrainedModel(PreTrainedModel):
     config_class = ElectraConfig
     load_tf_weights = load_tf_weights_in_electra
     base_model_prefix = "electra"
+    supports_gradient_checkpointing = True
     _keys_to_ignore_on_load_missing = [r"position_ids"]
     _keys_to_ignore_on_load_unexpected = [r"electra\.embeddings_project\.weight", r"electra\.embeddings_project\.bias"]
 
     # Copied from transformers.models.bert.modeling_bert.BertPreTrainedModel._init_weights
     def _init_weights(self, module):
-        """ Initialize the weights """
-        if isinstance(module, (nn.Linear, nn.Embedding)):
+        """Initialize the weights"""
+        if isinstance(module, nn.Linear):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
-        if isinstance(module, nn.Linear) and module.bias is not None:
-            module.bias.data.zero_()
+
+    def _set_gradient_checkpointing(self, module, value=False):
+        if isinstance(module, ElectraEncoder):
+            module.gradient_checkpointing = value
 
 
 @dataclass
@@ -774,7 +800,7 @@ ELECTRA_INPUTS_DOCSTRING = r"""
 @add_start_docstrings(
     "The bare Electra Model transformer outputting raw hidden-states without any specific head on top. Identical to "
     "the BERT model except that it uses an additional linear layer between the embedding layer and the encoder if the "
-    "hidden size and embedding size are different."
+    "hidden size and embedding size are different. "
     ""
     "Both the generator and discriminator checkpoints may be loaded into this model.",
     ELECTRA_START_DOCSTRING,
@@ -807,8 +833,8 @@ class ElectraModel(ElectraPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(ELECTRA_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="google/electra-small-discriminator",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=BaseModelOutputWithCrossAttentions,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -839,12 +865,18 @@ class ElectraModel(ElectraPreTrainedModel):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
+        batch_size, seq_length = input_shape
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
         if attention_mask is None:
             attention_mask = torch.ones(input_shape, device=device)
         if token_type_ids is None:
-            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+            if hasattr(self.embeddings, "token_type_ids"):
+                buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
+                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(batch_size, seq_length)
+                token_type_ids = buffered_token_type_ids_expanded
+            else:
+                token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
 
         extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape, device)
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
@@ -874,7 +906,10 @@ class ElectraClassificationHead(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        classifier_dropout = (
+            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+        )
+        self.dropout = nn.Dropout(classifier_dropout)
         self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
 
     def forward(self, features, **kwargs):
@@ -898,6 +933,7 @@ class ElectraForSequenceClassification(ElectraPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
+        self.config = config
         self.electra = ElectraModel(config)
         self.classifier = ElectraClassificationHead(config)
 
@@ -905,8 +941,8 @@ class ElectraForSequenceClassification(ElectraPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(ELECTRA_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="google/electra-small-discriminator",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=SequenceClassifierOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -948,13 +984,26 @@ class ElectraForSequenceClassification(ElectraPreTrainedModel):
 
         loss = None
         if labels is not None:
-            if self.num_labels == 1:
-                #  We are doing regression
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
                 loss_fct = MSELoss()
-                loss = loss_fct(logits.view(-1), labels.view(-1))
-            else:
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
 
         if not return_dict:
             output = (logits,) + discriminator_hidden_states[1:]
@@ -1087,8 +1136,8 @@ class ElectraForMaskedLM(ElectraPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(ELECTRA_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="google/electra-small-discriminator",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=MaskedLMOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -1160,14 +1209,17 @@ class ElectraForTokenClassification(ElectraPreTrainedModel):
         super().__init__(config)
 
         self.electra = ElectraModel(config)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        classifier_dropout = (
+            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+        )
+        self.dropout = nn.Dropout(classifier_dropout)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.init_weights()
 
     @add_start_docstrings_to_model_forward(ELECTRA_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="google/electra-small-discriminator",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=TokenClassifierOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -1213,8 +1265,10 @@ class ElectraForTokenClassification(ElectraPreTrainedModel):
             # Only keep active parts of the loss
             if attention_mask is not None:
                 active_loss = attention_mask.view(-1) == 1
-                active_logits = logits.view(-1, self.config.num_labels)[active_loss]
-                active_labels = labels.view(-1)[active_loss]
+                active_logits = logits.view(-1, self.config.num_labels)
+                active_labels = torch.where(
+                    active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
+                )
                 loss = loss_fct(active_logits, active_labels)
             else:
                 loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
@@ -1253,8 +1307,8 @@ class ElectraForQuestionAnswering(ElectraPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(ELECTRA_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="google/electra-small-discriminator",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=QuestionAnsweringModelOutput,
         config_class=_CONFIG_FOR_DOC,
     )
@@ -1299,8 +1353,8 @@ class ElectraForQuestionAnswering(ElectraPreTrainedModel):
 
         logits = self.qa_outputs(sequence_output)
         start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1)
-        end_logits = end_logits.squeeze(-1)
+        start_logits = start_logits.squeeze(-1).contiguous()
+        end_logits = end_logits.squeeze(-1).contiguous()
 
         total_loss = None
         if start_positions is not None and end_positions is not None:
@@ -1311,8 +1365,8 @@ class ElectraForQuestionAnswering(ElectraPreTrainedModel):
                 end_positions = end_positions.squeeze(-1)
             # sometimes the start/end positions are outside our model inputs, we ignore these terms
             ignored_index = start_logits.size(1)
-            start_positions.clamp_(0, ignored_index)
-            end_positions.clamp_(0, ignored_index)
+            start_positions = start_positions.clamp(0, ignored_index)
+            end_positions = end_positions.clamp(0, ignored_index)
 
             loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
             start_loss = loss_fct(start_logits, start_positions)
@@ -1354,8 +1408,8 @@ class ElectraForMultipleChoice(ElectraPreTrainedModel):
 
     @add_start_docstrings_to_model_forward(ELECTRA_INPUTS_DOCSTRING.format("batch_size, num_choices, sequence_length"))
     @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="google/electra-small-discriminator",
+        processor_class=_TOKENIZER_FOR_DOC,
+        checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=MultipleChoiceModelOutput,
         config_class=_CONFIG_FOR_DOC,
     )

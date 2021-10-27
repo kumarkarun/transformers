@@ -17,10 +17,11 @@
 import unittest
 
 from transformers import BertConfig, is_tf_available
+from transformers.models.auto import get_values
 from transformers.testing_utils import require_tf, slow
 
 from .test_configuration_common import ConfigTester
-from .test_modeling_tf_common import TFModelTesterMixin, ids_tensor
+from .test_modeling_tf_common import TFModelTesterMixin, floats_tensor, ids_tensor
 
 
 if is_tf_available():
@@ -123,6 +124,33 @@ class TFBertModelTester:
         )
 
         return config, input_ids, token_type_ids, input_mask, sequence_labels, token_labels, choice_labels
+
+    def prepare_config_and_inputs_for_decoder(self):
+        (
+            config,
+            input_ids,
+            token_type_ids,
+            input_mask,
+            sequence_labels,
+            token_labels,
+            choice_labels,
+        ) = self.prepare_config_and_inputs()
+
+        config.is_decoder = True
+        encoder_hidden_states = floats_tensor([self.batch_size, self.seq_length, self.hidden_size])
+        encoder_attention_mask = ids_tensor([self.batch_size, self.seq_length], vocab_size=2)
+
+        return (
+            config,
+            input_ids,
+            token_type_ids,
+            input_mask,
+            sequence_labels,
+            token_labels,
+            choice_labels,
+            encoder_hidden_states,
+            encoder_attention_mask,
+        )
 
     def create_and_check_bert_model(
         self, config, input_ids, token_type_ids, input_mask, sequence_labels, token_labels, choice_labels
@@ -274,13 +302,15 @@ class TFBertModelTest(TFModelTesterMixin, unittest.TestCase):
         else ()
     )
     test_head_masking = False
+    test_onnx = True
+    onnx_min_opset = 10
 
     # special case for ForPreTraining model
     def _prepare_for_class(self, inputs_dict, model_class, return_labels=False):
         inputs_dict = super()._prepare_for_class(inputs_dict, model_class, return_labels=return_labels)
 
         if return_labels:
-            if model_class in TF_MODEL_FOR_PRETRAINING_MAPPING.values():
+            if model_class in get_values(TF_MODEL_FOR_PRETRAINING_MAPPING):
                 inputs_dict["next_sentence_label"] = tf.zeros(self.model_tester.batch_size, dtype=tf.int32)
 
         return inputs_dict

@@ -30,13 +30,21 @@ our dense retriever outperforms a strong Lucene-BM25 system largely by 9%-19% ab
 retrieval accuracy, and helps our end-to-end QA system establish new state-of-the-art on multiple open-domain QA
 benchmarks.*
 
-The original code can be found `here <https://github.com/facebookresearch/DPR>`__.
+This model was contributed by `lhoestq <https://huggingface.co/lhoestq>`__. The original code can be found `here
+<https://github.com/facebookresearch/DPR>`__.
 
 
 DPRConfig
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: transformers.DPRConfig
+    :members:
+
+
+DPRPreTrainedModel
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: transformers.DPRPreTrainedModel
     :members:
 
 

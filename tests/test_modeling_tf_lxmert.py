@@ -13,8 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import tempfile
 import unittest
+
+import numpy as np
 
 from transformers import LxmertConfig, is_tf_available
 from transformers.testing_utils import require_tf, slow
@@ -362,6 +365,7 @@ class TFLxmertModelTest(TFModelTesterMixin, unittest.TestCase):
 
     all_model_classes = (TFLxmertModel, TFLxmertForPreTraining) if is_tf_available() else ()
     test_head_masking = False
+    test_onnx = False
 
     def setUp(self):
         self.model_tester = TFLxmertModelTester(self)
@@ -553,8 +557,6 @@ class TFLxmertModelTest(TFModelTesterMixin, unittest.TestCase):
             tf_hidden_states = tfo[0].numpy()
             pt_hidden_states = pto[0].numpy()
 
-            import numpy as np
-
             tf_nans = np.copy(np.isnan(tf_hidden_states))
             pt_nans = np.copy(np.isnan(pt_hidden_states))
 
@@ -704,28 +706,35 @@ class TFLxmertModelTest(TFModelTesterMixin, unittest.TestCase):
         # This test is too long (>30sec) and makes fail the CI
         pass
 
-    def test_mixed_precision(self):
-        # TODO JP: Make Lxmert float16 compliant
-        pass
-
     @slow
-    def test_saved_model_with_hidden_states_output(self):
+    def test_saved_model_creation_extended(self):
         config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
         config.output_hidden_states = True
+        config.output_attentions = True
+
+        if hasattr(config, "use_cache"):
+            config.use_cache = True
+
+        encoder_seq_length = getattr(self.model_tester, "encoder_seq_length", self.model_tester.seq_length)
+        encoder_key_length = getattr(self.model_tester, "key_length", encoder_seq_length)
 
         for model_class in self.all_model_classes:
             class_inputs_dict = self._prepare_for_class(inputs_dict, model_class)
             model = model_class(config)
-            model._saved_model_inputs_spec = None
-            model._set_save_spec(class_inputs_dict)
+            num_out = len(model(class_inputs_dict))
 
             with tempfile.TemporaryDirectory() as tmpdirname:
-                tf.saved_model.save(model, tmpdirname)
-                model = tf.keras.models.load_model(tmpdirname)
+                model.save_pretrained(tmpdirname, saved_model=True)
+                saved_model_dir = os.path.join(tmpdirname, "saved_model", "1")
+                model = tf.keras.models.load_model(saved_model_dir)
                 outputs = model(class_inputs_dict)
-
                 language_hidden_states = outputs["language_hidden_states"]
                 vision_hidden_states = outputs["vision_hidden_states"]
+                language_attentions = outputs["language_attentions"]
+                vision_attentions = outputs["vision_attentions"]
+                cross_encoder_attentions = outputs["cross_encoder_attentions"]
+
+                self.assertEqual(len(outputs), num_out)
 
                 self.assertEqual(len(language_hidden_states), self.model_tester.num_hidden_layers["language"] + 1)
                 self.assertEqual(len(vision_hidden_states), self.model_tester.num_hidden_layers["vision"] + 1)
@@ -741,29 +750,6 @@ class TFLxmertModelTest(TFModelTesterMixin, unittest.TestCase):
                     list(vision_hidden_states[0].shape[-2:]),
                     [num_visual_features, self.model_tester.hidden_size],
                 )
-
-    @slow
-    def test_saved_model_with_attentions_output(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
-        config.output_attentions = True
-
-        encoder_seq_length = getattr(self.model_tester, "encoder_seq_length", self.model_tester.seq_length)
-        encoder_key_length = getattr(self.model_tester, "key_length", encoder_seq_length)
-
-        for model_class in self.all_model_classes:
-            class_inputs_dict = self._prepare_for_class(inputs_dict, model_class)
-            model = model_class(config)
-            model._saved_model_inputs_spec = None
-            model._set_save_spec(class_inputs_dict)
-
-            with tempfile.TemporaryDirectory() as tmpdirname:
-                tf.saved_model.save(model, tmpdirname)
-                model = tf.keras.models.load_model(tmpdirname)
-                outputs = model(class_inputs_dict)
-
-                language_attentions = outputs["language_attentions"]
-                vision_attentions = outputs["vision_attentions"]
-                cross_encoder_attentions = outputs["cross_encoder_attentions"]
 
                 self.assertEqual(len(language_attentions), self.model_tester.num_hidden_layers["language"])
                 self.assertEqual(len(vision_attentions), self.model_tester.num_hidden_layers["vision"])
@@ -782,3 +768,30 @@ class TFLxmertModelTest(TFModelTesterMixin, unittest.TestCase):
 
                 for attention, attention_shape in zip(attentions, attention_shapes):
                     self.assertListEqual(list(attention[0].shape[-3:]), attention_shape)
+
+
+@require_tf
+class TFLxmertModelIntegrationTest(unittest.TestCase):
+    @slow
+    def test_inference_masked_lm(self):
+        model = TFLxmertModel.from_pretrained("unc-nlp/lxmert-base-uncased")
+        input_ids = tf.constant([[101, 345, 232, 328, 740, 140, 1695, 69, 6078, 1588, 102]])
+
+        num_visual_features = 10
+        _, visual_feats = np.random.seed(0), np.random.rand(1, num_visual_features, model.config.visual_feat_dim)
+        _, visual_pos = np.random.seed(0), np.random.rand(1, num_visual_features, 4)
+        visual_feats = tf.convert_to_tensor(visual_feats, dtype=tf.float32)
+        visual_pos = tf.convert_to_tensor(visual_pos, dtype=tf.float32)
+        output = model(input_ids, visual_feats=visual_feats, visual_pos=visual_pos)[0]
+        expected_shape = [1, 11, 768]
+        self.assertEqual(expected_shape, output.shape)
+        expected_slice = tf.constant(
+            [
+                [
+                    [0.24170142, -0.98075, 0.14797261],
+                    [1.2540525, -0.83198136, 0.5112344],
+                    [1.4070463, -1.1051831, 0.6990401],
+                ]
+            ]
+        )
+        tf.debugging.assert_near(output[:, :3, :3], expected_slice, atol=1e-4)
