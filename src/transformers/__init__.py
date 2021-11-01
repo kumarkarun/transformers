@@ -398,6 +398,7 @@ if is_tokenizers_available():
     _import_structure["models.barthez"].append("BarthezTokenizerFast")
     _import_structure["models.bert"].append("BertTokenizerFast")
     _import_structure["models.big_bird"].append("BigBirdTokenizerFast")
+    _import_structure["models.blenderbot"].append("BlenderbotTokenizerFast")
     _import_structure["models.camembert"].append("CamembertTokenizerFast")
     _import_structure["models.deberta"].append("DebertaTokenizerFast")
     _import_structure["models.distilbert"].append("DistilBertTokenizerFast")
@@ -584,6 +585,7 @@ if is_torch_available():
         [
             "MODEL_FOR_AUDIO_CLASSIFICATION_MAPPING",
             "MODEL_FOR_CAUSAL_LM_MAPPING",
+            "MODEL_FOR_CTC_MAPPING",
             "MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING",
             "MODEL_FOR_IMAGE_SEGMENTATION_MAPPING",
             "MODEL_FOR_MASKED_LM_MAPPING",
@@ -594,6 +596,7 @@ if is_torch_available():
             "MODEL_FOR_QUESTION_ANSWERING_MAPPING",
             "MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING",
             "MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING",
+            "MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING",
             "MODEL_FOR_TABLE_QUESTION_ANSWERING_MAPPING",
             "MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING",
             "MODEL_MAPPING",
@@ -635,6 +638,7 @@ if is_torch_available():
             "BEIT_PRETRAINED_MODEL_ARCHIVE_LIST",
             "BeitForImageClassification",
             "BeitForMaskedImageModeling",
+            "BeitForSemanticSegmentation",
             "BeitModel",
             "BeitPreTrainedModel",
         ]
@@ -2283,6 +2287,7 @@ if TYPE_CHECKING:
         from .models.barthez import BarthezTokenizerFast
         from .models.bert import BertTokenizerFast
         from .models.big_bird import BigBirdTokenizerFast
+        from .models.blenderbot import BlenderbotTokenizerFast
         from .models.blenderbot_small import BlenderbotSmallTokenizerFast
         from .models.camembert import CamembertTokenizerFast
         from .models.clip import CLIPTokenizerFast
@@ -2430,6 +2435,7 @@ if TYPE_CHECKING:
         from .models.auto import (
             MODEL_FOR_AUDIO_CLASSIFICATION_MAPPING,
             MODEL_FOR_CAUSAL_LM_MAPPING,
+            MODEL_FOR_CTC_MAPPING,
             MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
             MODEL_FOR_IMAGE_SEGMENTATION_MAPPING,
             MODEL_FOR_MASKED_LM_MAPPING,
@@ -2440,6 +2446,7 @@ if TYPE_CHECKING:
             MODEL_FOR_QUESTION_ANSWERING_MAPPING,
             MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
             MODEL_FOR_SEQUENCE_CLASSIFICATION_MAPPING,
+            MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING,
             MODEL_FOR_TABLE_QUESTION_ANSWERING_MAPPING,
             MODEL_FOR_TOKEN_CLASSIFICATION_MAPPING,
             MODEL_MAPPING,
@@ -2477,6 +2484,7 @@ if TYPE_CHECKING:
             BEIT_PRETRAINED_MODEL_ARCHIVE_LIST,
             BeitForImageClassification,
             BeitForMaskedImageModeling,
+            BeitForSemanticSegmentation,
             BeitModel,
             BeitPreTrainedModel,
         )
