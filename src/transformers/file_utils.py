@@ -35,6 +35,7 @@ from dataclasses import fields
 from enum import Enum
 from functools import partial, wraps
 from hashlib import sha256
+from itertools import chain
 from pathlib import Path
 from types import ModuleType
 from typing import Any, BinaryIO, ContextManager, Dict, List, Optional, Tuple, Union
@@ -48,7 +49,7 @@ from tqdm.auto import tqdm
 
 import requests
 from filelock import FileLock
-from huggingface_hub import HfApi, HfFolder, Repository
+from huggingface_hub import HfFolder, Repository, create_repo, list_repo_files, whoami
 from transformers.utils.versions import importlib_metadata
 
 from . import __version__
@@ -194,6 +195,14 @@ try:
     logger.debug(f"Successfully imported torch-scatter version {_scatter_version}")
 except importlib_metadata.PackageNotFoundError:
     _scatter_available = False
+
+
+_pytorch_quantization_available = importlib.util.find_spec("pytorch_quantization") is not None
+try:
+    _pytorch_quantization_version = importlib_metadata.version("pytorch_quantization")
+    logger.debug(f"Successfully imported pytorch-quantization version {_pytorch_quantization_version}")
+except importlib_metadata.PackageNotFoundError:
+    _pytorch_quantization_available = False
 
 
 _soundfile_available = importlib.util.find_spec("soundfile") is not None
@@ -431,6 +440,10 @@ def is_scatter_available():
     return _scatter_available
 
 
+def is_pytorch_quantization_available():
+    return _pytorch_quantization_available
+
+
 def is_pandas_available():
     return importlib.util.find_spec("pandas") is not None
 
@@ -610,6 +623,12 @@ SCATTER_IMPORT_ERROR = """
 explained here: https://github.com/rusty1s/pytorch_scatter.
 """
 
+# docstyle-ignore
+PYTORCH_QUANTIZATION_IMPORT_ERROR = """
+{0} requires the pytorch-quantization library but it was not found in your environment. You can install it with pip:
+`pip install pytorch-quantization --extra-index-url https://pypi.ngc.nvidia.com`
+"""
+
 
 # docstyle-ignore
 PANDAS_IMPORT_ERROR = """
@@ -661,6 +680,7 @@ BACKENDS_MAPPING = OrderedDict(
         ("protobuf", (is_protobuf_available, PROTOBUF_IMPORT_ERROR)),
         ("pytesseract", (is_pytesseract_available, PYTESSERACT_IMPORT_ERROR)),
         ("scatter", (is_scatter_available, SCATTER_IMPORT_ERROR)),
+        ("pytorch_quantization", (is_pytorch_quantization_available, PYTORCH_QUANTIZATION_IMPORT_ERROR)),
         ("sentencepiece", (is_sentencepiece_available, SENTENCEPIECE_IMPORT_ERROR)),
         ("sklearn", (is_sklearn_available, SKLEARN_IMPORT_ERROR)),
         ("speech", (is_speech_available, SPEECH_IMPORT_ERROR)),
@@ -1808,17 +1828,14 @@ def get_list_of_files(
     if is_offline_mode() or local_files_only:
         return []
 
-    # Otherwise we grab the token and use the model_info method.
+    # Otherwise we grab the token and use the list_repo_files method.
     if isinstance(use_auth_token, str):
         token = use_auth_token
     elif use_auth_token is True:
         token = HfFolder.get_token()
     else:
         token = None
-    model_info = HfApi(endpoint=HUGGINGFACE_CO_RESOLVE_ENDPOINT).model_info(
-        path_or_repo, revision=revision, token=token
-    )
-    return [f.rfilename for f in model_info.siblings]
+    return list_repo_files(path_or_repo, revision=revision, token=token)
 
 
 class cached_property(property):
@@ -2113,7 +2130,7 @@ class _LazyModule(ModuleType):
             for value in values:
                 self._class_to_module[value] = key
         # Needed for autocompletion in an IDE
-        self.__all__ = list(import_structure.keys()) + sum(import_structure.values(), [])
+        self.__all__ = list(import_structure.keys()) + list(chain(*import_structure.values()))
         self.__file__ = module_file
         self.__spec__ = module_spec
         self.__path__ = [os.path.dirname(module_file)]
@@ -2308,7 +2325,7 @@ class PushToHubMixin:
             token = None
 
         # Special provision for the test endpoint (CI)
-        return HfApi(endpoint=HUGGINGFACE_CO_RESOLVE_ENDPOINT).create_repo(
+        return create_repo(
             token,
             repo_name,
             organization=organization,
@@ -2366,7 +2383,7 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
     if token is None:
         token = HfFolder.get_token()
     if organization is None:
-        username = HfApi().whoami(token)["name"]
+        username = whoami(token)["name"]
         return f"{username}/{model_id}"
     else:
         return f"{organization}/{model_id}"

@@ -17,6 +17,7 @@
 
 import collections.abc
 import math
+from dataclasses import dataclass
 
 import torch
 import torch.utils.checkpoint
@@ -40,6 +41,32 @@ BEIT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "microsoft/beit-base-patch16-224",
     # See all BEiT models at https://huggingface.co/models?filter=beit
 ]
+
+
+@dataclass
+class BeitModelOutputWithPooling(BaseModelOutputWithPooling):
+    """
+    Class for outputs of :class:`~transformers.BeitModel`.
+
+    Args:
+        last_hidden_state (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`):
+            Sequence of hidden-states at the output of the last layer of the model.
+        pooler_output (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, hidden_size)`):
+            Average of the last layer hidden states of the patch tokens (excluding the `[CLS]` token) if
+            `config.use_mean_pooling` is set to True. If set to False, then the final hidden state of the `[CLS]` token
+            will be returned.
+        hidden_states (:obj:`tuple(torch.FloatTensor)`, `optional`, returned when ``output_hidden_states=True`` is passed or when ``config.output_hidden_states=True``):
+            Tuple of :obj:`torch.FloatTensor` (one for the output of the embeddings + one for the output of each layer)
+            of shape :obj:`(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
+        attentions (:obj:`tuple(torch.FloatTensor)`, `optional`, returned when ``output_attentions=True`` is passed or when ``config.output_attentions=True``):
+            Tuple of :obj:`torch.FloatTensor` (one for each layer) of shape :obj:`(batch_size, num_heads,
+            sequence_length, sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+    """
 
 
 # Inspired by
@@ -571,7 +598,8 @@ class BeitModel(BeitPreTrainedModel):
         )
         self.pooler = BeitPooler(config) if add_pooling_layer else None
 
-        self.init_weights()
+        # Initialize weights and apply final processing
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.embeddings.patch_embeddings
@@ -585,7 +613,7 @@ class BeitModel(BeitPreTrainedModel):
             self.encoder.layer[layer].attention.prune_heads(heads)
 
     @add_start_docstrings_to_model_forward(BEIT_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=BaseModelOutputWithPooling, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(output_type=BeitModelOutputWithPooling, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values=None,
@@ -646,7 +674,7 @@ class BeitModel(BeitPreTrainedModel):
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
 
-        return BaseModelOutputWithPooling(
+        return BeitModelOutputWithPooling(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             hidden_states=encoder_outputs.hidden_states,
@@ -688,7 +716,8 @@ class BeitForMaskedImageModeling(BeitPreTrainedModel):
         self.layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size)
 
-        self.init_weights()
+        # Initialize weights and apply final processing
+        self.post_init()
 
     @add_start_docstrings_to_model_forward(BEIT_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=MaskedLMOutput, config_class=_CONFIG_FOR_DOC)
@@ -778,7 +807,8 @@ class BeitForImageClassification(BeitPreTrainedModel):
         # Classifier head
         self.classifier = nn.Linear(config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
 
-        self.init_weights()
+        # Initialize weights and apply final processing
+        self.post_init()
 
     @add_start_docstrings_to_model_forward(BEIT_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=SequenceClassifierOutput, config_class=_CONFIG_FOR_DOC)
@@ -987,7 +1017,7 @@ class BeitUperHead(nn.Module):
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
             prev_shape = laterals[i - 1].shape[2:]
-            laterals[i - 1] += nn.functional.interpolate(
+            laterals[i - 1] = laterals[i - 1] + nn.functional.interpolate(
                 laterals[i], size=prev_shape, mode="bilinear", align_corners=self.align_corners
             )
 
@@ -1094,7 +1124,8 @@ class BeitForSemanticSegmentation(BeitPreTrainedModel):
         self.decode_head = BeitUperHead(config)
         self.auxiliary_head = BeitFCNHead(config) if config.use_auxiliary_head else None
 
-        self.init_weights()
+        # Initialize weights and apply final processing
+        self.post_init()
 
     def compute_loss(self, logits, auxiliary_logits, labels):
         # upsample logits to the images' original size
@@ -1106,7 +1137,7 @@ class BeitForSemanticSegmentation(BeitPreTrainedModel):
                 auxiliary_logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
             )
         # compute weighted loss
-        loss_fct = CrossEntropyLoss(ignore_index=255)
+        loss_fct = CrossEntropyLoss(ignore_index=self.config.semantic_loss_ignore_index)
         main_loss = loss_fct(upsampled_logits, labels)
         auxiliary_loss = loss_fct(upsampled_auxiliary_logits, labels)
         loss = main_loss + self.config.auxiliary_loss_weight * auxiliary_loss
